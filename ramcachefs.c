@@ -549,7 +549,7 @@ static int resize_file_unsafe(struct ramcachefs_data* data,
         return errno;
     }
     if (inode->file_backed) {
-        memcpy(newbuf, inode->content, inode->size);
+        memcpy(newbuf, inode->content, inode->size < newsize ? inode->size : newsize);
         if (munmap(inode->content, inode->size)) {
             fuse_log(FUSE_LOG_ERR, "munmap failed: %m\n");
         }
