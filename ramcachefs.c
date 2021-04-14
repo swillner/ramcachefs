@@ -795,6 +795,7 @@ static int persist_internal_unsafe(struct ramcachefs_data* data, int parentfd, s
                             close(fd);
                             return -1;
                         }
+                        inode->file_backed = 1;
                     }
 #endif
                     close(fd);
