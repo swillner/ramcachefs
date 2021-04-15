@@ -105,6 +105,7 @@ struct ramcachefs_inode {
 struct ramcachefs_data {
     struct ramcachefs_inode* root;
 
+    int direct_io;
     int prepopulate;
 
     int orig_root_fd;
@@ -133,6 +134,7 @@ struct ramcachefs_file_info {
 
 struct ramcachefs_opts {
     char* size;
+    int direct_io;
     int noautopersist;
     int prepopulate;
     int trigger_persist;
@@ -142,6 +144,7 @@ struct ramcachefs_opts {
 static const struct fuse_opt ramcachefs_opts[] = {
     {"--trigger-persist", offsetof(struct ramcachefs_opts, trigger_persist), 1},
     {"-p", offsetof(struct ramcachefs_opts, trigger_persist), 1},
+    {"direct_io", offsetof(struct ramcachefs_opts, direct_io), 1},
     {"maxinodes=%u", offsetof(struct ramcachefs_opts, max_inodes), 1},
     {"noautopersist", offsetof(struct ramcachefs_opts, noautopersist), 1},
     {"prepopulate", offsetof(struct ramcachefs_opts, prepopulate), 1},
@@ -1306,10 +1309,10 @@ static int mkinode(fuse_req_t req, struct ramcachefs_inode* parentnode, struct r
 }
 
 static void ramcachefs_create(fuse_req_t req, fuse_ino_t parent, const char* name, mode_t mode, struct fuse_file_info* fi) {
+    struct ramcachefs_data* data = get_data(req);
     struct ramcachefs_inode* parentnode = get_inode(req, parent);
 
 #ifdef DEBUG
-    struct ramcachefs_data* data = get_data(req);
     if (data->debug) {
         fuse_log(FUSE_LOG_DEBUG, "   create ");
         print_path(NULL, parentnode, name);
@@ -1333,6 +1336,9 @@ static void ramcachefs_create(fuse_req_t req, fuse_ino_t parent, const char* nam
 
     inode->mode = mode;
 
+    if (data->direct_io || (fi->flags & O_DIRECT)) {
+        fi->direct_io = 1;
+    }
     if (mkinode(req, parentnode, inode, fi)) {
         free(rfi);
         fi->fh = 0;
@@ -1418,6 +1424,16 @@ static void ramcachefs_init(void* userdata, struct fuse_conn_info* conn) {
      */
     if (conn->capable & FUSE_CAP_NO_OPENDIR_SUPPORT) {
         data->opendir_result = ENOSYS;
+    }
+
+    if (conn->capable & FUSE_CAP_SPLICE_WRITE) {
+        conn->want |= FUSE_CAP_SPLICE_WRITE;
+    }
+    if (conn->capable & FUSE_CAP_SPLICE_READ) {
+        conn->want |= FUSE_CAP_SPLICE_READ;
+    }
+    if (conn->capable & FUSE_CAP_SPLICE_MOVE) {
+        conn->want |= FUSE_CAP_SPLICE_MOVE;
     }
 }
 
@@ -1538,8 +1554,9 @@ static void ramcachefs_mknod(fuse_req_t req, fuse_ino_t parent, const char* name
 }
 
 static void ramcachefs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_info* fi) {
-#ifdef DEBUG
     struct ramcachefs_data* data = get_data(req);
+
+#ifdef DEBUG
     struct ramcachefs_inode* inode = get_inode(req, ino);
     if (data->debug) {
         fuse_log(FUSE_LOG_DEBUG, "   open ");
@@ -1555,7 +1572,9 @@ static void ramcachefs_open(fuse_req_t req, fuse_ino_t ino, struct fuse_file_inf
         fuse_reply_err(req, ENOMEM);
         return;
     }
-    fi->direct_io = 1;
+    if (data->direct_io || (fi->flags & O_DIRECT)) {
+        fi->direct_io = 1;
+    }
     fuse_reply_open(req, fi);
 }
 
@@ -2062,6 +2081,7 @@ int main(int argc, char* argv[]) {
         printf("    -p   --trigger-persist trigger persist\n");
         fuse_cmdline_help();
         fuse_lowlevel_help();
+        printf("    -o direct_io           always use direct_io (breaks mmap!)\n");
         printf("    -o maxinodes=NUMBER    maximum number of inodes (default: '1000000')\n");
         printf("    -o noautopersist       do not persist on unmount\n");
 #ifndef DONT_USE_MMAP
@@ -2144,6 +2164,7 @@ int main(int argc, char* argv[]) {
         free(opts.size);
     }
     data.block_size = sysconf(_SC_PAGESIZE);
+    data.direct_io = opts.direct_io;
     data.prepopulate = opts.prepopulate;
     data.max_inodes = opts.max_inodes;
     data.max_blocks = (size + data.block_size - 1) / data.block_size;
