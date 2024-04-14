@@ -520,6 +520,7 @@ static int resize_file_unsafe(struct ramcachefs_data* data,
         if (munmap(inode->content, inode->size)) {
             fuse_log(FUSE_LOG_ERR, "munmap failed: %m\n");
         }
+        inode->file_backed = 0;
 #endif
         data->free_blocks += (inode->size + data->block_size - 1) / data->block_size;
         inode->content = NULL;
